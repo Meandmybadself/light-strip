@@ -1,0 +1,18 @@
+{
+  "name": "light-strip-service",
+  "version": "1.0.0",
+  "description": "Express service for calculating time until next cron schedule",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "deploy": "rsync -avz --exclude 'node_modules' --exclude 'pnpm-lock.yaml' --exclude '.git' . autobot:/home/autobot/Sites/light-strip/server && ssh autobot 'pm2 restart light-strip'"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cron-parser": "^4.9.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+} 

@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
 import parser from 'cron-parser';
 
 const app = express();
@@ -9,9 +9,9 @@ const cronSchedules = [
   '30 6 * * 1-5'  // Every weekday at 6:30AM
 ];
 
-const calculateNextTimeInSeconds = (): number => {
+const calculateNextTimeInSeconds = () => {
   const now = new Date();
-  let nextTime: Date | null = null;
+  let nextTime = null;
 
   for (const schedule of cronSchedules) {
     try {
@@ -33,7 +33,7 @@ const calculateNextTimeInSeconds = (): number => {
   return Math.floor((nextTime.getTime() - now.getTime()) / 1000);
 };
 
-app.get('/', (_: Request, res: Response) => {
+app.get('/', (_, res) => {
   try {
     const secondsUntilNext = calculateNextTimeInSeconds();
     res.send(`${secondsUntilNext}`);

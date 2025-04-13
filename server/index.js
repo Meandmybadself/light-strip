@@ -1,8 +1,8 @@
-import express from 'express';
-import parser from 'cron-parser';
+const express = require('express');
+const parser = require('cron-parser');
 
 const app = express();
-const port = process.env.PORT || 4000;
+const port = process.env.PORT || 4001;
 
 // Array of cron expressions
 const cronSchedules = [

@@ -6,7 +6,8 @@ const port = process.env.PORT || 4001;
 
 // Array of cron expressions
 const cronSchedules = [
-  '30 6 * * 1-5'  // Every weekday at 6:30AM
+  '30 6 * * 1-5',  // Every weekday at 6:30AM
+  '0 8 * * 1-5' // Every weekday at 8:00AM
 ];
 
 const calculateNextTimeInSeconds = () => {
@@ -40,6 +41,11 @@ app.get('/', (_, res) => {
   } catch (error) {
     res.status(500).json({ error: 'Failed to calculate next time' });
   }
+});
+
+// Testing endpoint
+app.get('/test/:seconds', (req, res) => {
+  res.send(`${req.params.seconds}`);
 });
 
 app.listen(port, () => {

@@ -1,10 +1,16 @@
 #include <Adafruit_NeoPixel.h>
 #include <math.h> // For floor()
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <esp32-hal-timer.h>
 
 #define PIN        15
 #define NUMPIXELS  60
-#define MAX_BRIGHTNESS 100 // Max brightness (0-255)
+#define MAX_BRIGHTNESS 55 // Max brightness (0-255)
 #define MAX_TIME_MINUTES 1
+#define WIFI_SSID "Estate"
+#define WIFI_PASSWORD "wireless"
+#define SERVER_URL "http://192.168.1.15:4001"
 
 const unsigned long MAX_TIME_SECONDS = MAX_TIME_MINUTES * 60;
 
@@ -12,7 +18,6 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800
 
 unsigned long startTimeMillis = 0;
 unsigned long endTimeMillis = 0;
-bool timerRunning = false;
 
 // --- Helper Functions ---
 
@@ -49,45 +54,199 @@ void getColorForProgress(float progress, uint8_t& r, uint8_t& g, uint8_t& b) {
   }
 }
 
+// Connect to WiFi
+bool connectToWiFi() {
+  Serial.println("\n=== WiFi Connection Attempt ===");
+  Serial.println("Attempting to connect to WiFi...");
+  Serial.print("SSID: ");
+  Serial.println(WIFI_SSID);
+  
+  WiFi.mode(WIFI_STA);
+  Serial.println("WiFi mode set to STA");
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.println("WiFi.begin() called");
+  
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Connected to WiFi! IP address: ");
+    Serial.println(WiFi.localIP());
+    return true;
+  } else {
+    Serial.println("Failed to connect to WiFi");
+    Serial.print("WiFi status code: ");
+    Serial.println(WiFi.status());
+    return false;
+  }
+}
+
+// Animate from off state to current progress over 3 seconds
+void animateStartup(float targetProgress, uint8_t max_r, uint8_t max_g, uint8_t max_b) {
+  const unsigned long ANIMATION_DURATION_MS = 1000;
+  unsigned long animationStartTime = millis();
+  
+  while (millis() - animationStartTime < ANIMATION_DURATION_MS) {
+    float animationProgress = (float)(millis() - animationStartTime) / ANIMATION_DURATION_MS;
+    float currentProgress = animationProgress * targetProgress;
+    
+    // Calculate current color based on progress
+    uint8_t current_r, current_g, current_b;
+    getColorForProgress(currentProgress, current_r, current_g, current_b);
+    
+    // Scale colors by MAX_BRIGHTNESS
+    float brightnessScale = (float)MAX_BRIGHTNESS / 255.0;
+    current_r = (uint8_t)(current_r * brightnessScale);
+    current_g = (uint8_t)(current_g * brightnessScale);
+    current_b = (uint8_t)(current_b * brightnessScale);
+    
+    float threshold = currentProgress * NUMPIXELS;
+    int lastFullPixel = floor(threshold - 0.0001);
+    int fadingPixel = floor(threshold);
+    
+    for (int i = 0; i < NUMPIXELS; i++) {
+      if (i <= lastFullPixel) {
+        strip.setPixelColor(i, current_r, current_g, current_b);
+      } else if (i == fadingPixel && fadingPixel < NUMPIXELS) {
+        float fadeFraction = threshold - floor(threshold);
+        uint8_t fade_r = (uint8_t)(current_r * fadeFraction);
+        uint8_t fade_g = (uint8_t)(current_g * fadeFraction);
+        uint8_t fade_b = (uint8_t)(current_b * fadeFraction);
+        strip.setPixelColor(i, fade_r, fade_g, fade_b);
+      } else {
+        strip.setPixelColor(i, 0, 0, 0);
+      }
+    }
+    
+    strip.show();
+    delay(10);
+  }
+}
+
+// Check for next event and handle sleep/start countdown
+void checkForNextEvent() {
+  Serial.println("\n=== Checking for next event ===");
+  
+  if (!connectToWiFi()) {
+    Serial.println("Failed to connect to WiFi. Retrying in 30 seconds...");
+    delay(30000);
+    return;
+  }
+
+  Serial.print("Making HTTP request to: ");
+  Serial.println(SERVER_URL);
+  
+  HTTPClient http;
+  Serial.println("HTTPClient created");
+  
+  http.begin(SERVER_URL);
+  Serial.println("http.begin() completed");
+  
+  Serial.println("Sending GET request...");
+  int httpCode = http.GET();
+  Serial.println("GET request completed");
+
+  Serial.print("HTTP Response code: ");
+  Serial.println(httpCode);
+
+  if (httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    Serial.print("Received payload: ");
+    Serial.println(payload);
+    
+    int secondsUntilEvent = payload.toInt();
+    int minutesUntilEvent = secondsUntilEvent / 60;
+
+    Serial.print("Next event in ");
+    Serial.print(minutesUntilEvent);
+    Serial.println(" minutes");
+
+    if (minutesUntilEvent > 30) {
+      Serial.println("Going to deep sleep for 30 minutes before event");
+      http.end();
+      WiFi.disconnect();
+      
+      uint64_t sleepTime = (minutesUntilEvent - 30) * 60 * 1000000ULL;
+      Serial.print("Sleep time in microseconds: ");
+      Serial.println(sleepTime);
+      
+      esp_sleep_enable_timer_wakeup(sleepTime);
+      Serial.println("Deep sleep enabled, going to sleep now...");
+      esp_deep_sleep_start();
+    } else {
+      // Start countdown
+      startTimeMillis = millis();
+      endTimeMillis = startTimeMillis + secondsUntilEvent * 1000UL;
+      Serial.print("Starting countdown for ");
+      Serial.print(secondsUntilEvent);
+      Serial.println(" seconds");
+      
+      // Calculate initial progress and colors for startup animation
+      float initialProgress = 1.0 - ((float)0 / (float)(secondsUntilEvent * 1000));
+      uint8_t base_r, base_g, base_b;
+      getColorForProgress(initialProgress, base_r, base_g, base_b);
+      
+      // Scale colors by MAX_BRIGHTNESS
+      float brightnessScale = (float)MAX_BRIGHTNESS / 255.0;
+      uint8_t max_r = (uint8_t)(base_r * brightnessScale);
+      uint8_t max_g = (uint8_t)(base_g * brightnessScale);
+      uint8_t max_b = (uint8_t)(base_b * brightnessScale);
+      
+      // Perform startup animation
+      animateStartup(initialProgress, max_r, max_g, max_b);
+    }
+  } else {
+    Serial.print("HTTP request failed, error: ");
+    Serial.println(http.errorToString(httpCode));
+    Serial.println("Retrying in 30 seconds...");
+    delay(30000);
+  }
+  
+  http.end();
+}
+
 // --- Arduino Setup ---
 
 void setup() {
   Serial.begin(115200);
   delay(1000); // Wait for serial connection
-  Serial.println("Initializing Countdown Timer...");
+  Serial.println("\n=== Light Strip Initialization ===");
+  Serial.println("Initializing NeoPixel strip...");
 
   strip.begin();
+  Serial.println("strip.begin() completed");
+  
   strip.clear(); // Initialize all pixels to 'off'
+  Serial.println("strip.clear() completed");
+  
   strip.show();
+  Serial.println("strip.show() completed");
+  Serial.println("NeoPixel strip initialized");
 
-  // Start the timer immediately for testing
-  startTimeMillis = millis();
-  endTimeMillis = startTimeMillis + MAX_TIME_SECONDS * 1000UL; // Use UL for unsigned long
-  timerRunning = true;
-  Serial.print("Timer started. Ends in: ");
-  Serial.print(MAX_TIME_SECONDS);
-  Serial.println(" seconds.");
+  Serial.println("About to check for next event...");
+  checkForNextEvent();
+  Serial.println("Returned from checkForNextEvent()");
 }
 
 // --- Arduino Loop ---
 
 void loop() {
-  if (!timerRunning) {
-    // Do nothing if timer is not running
-    // (Future: check for HTTP request here)
-    delay(100); // Prevent busy-waiting
-    return;
-  }
-
   unsigned long currentTimeMillis = millis();
 
   // --- Check for Timer Completion ---
   if (currentTimeMillis >= endTimeMillis) {
-    Serial.println("Timer finished!");
+    Serial.println("\n=== Countdown Complete ===");
     strip.clear(); // Turn all pixels off
     strip.show();
-    timerRunning = false;
-    return; // Exit loop iteration
+    Serial.println("Checking for next event...");
+    checkForNextEvent();
+    return;
   }
 
   // --- Calculate Progress ---
@@ -106,7 +265,6 @@ void loop() {
   uint8_t max_r = (uint8_t)(base_r * brightnessScale);
   uint8_t max_g = (uint8_t)(base_g * brightnessScale);
   uint8_t max_b = (uint8_t)(base_b * brightnessScale);
-
 
   // --- Update LEDs ---
   float threshold = progress * NUMPIXELS; // The point separating on/off pixels

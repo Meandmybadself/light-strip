@@ -5,12 +5,12 @@
 #include <esp32-hal-timer.h>
 
 #define PIN        15
-#define NUMPIXELS  60
-#define MAX_BRIGHTNESS 55 // Max brightness (0-255)
-#define MAX_TIME_MINUTES 1
+#define NUMPIXELS  65
+#define MAX_BRIGHTNESS 50 // Max brightness (0-255)
+#define MAX_TIME_MINUTES 60
 #define WIFI_SSID "Estate"
 #define WIFI_PASSWORD "wireless"
-#define SERVER_URL "http://192.168.1.15:4001"
+#define SERVER_URL "http://192.168.1.15:4001/test/3600"
 
 const unsigned long MAX_TIME_SECONDS = MAX_TIME_MINUTES * 60;
 
@@ -167,12 +167,12 @@ void checkForNextEvent() {
     Serial.print(minutesUntilEvent);
     Serial.println(" minutes");
 
-    if (minutesUntilEvent > 30) {
-      Serial.println("Going to deep sleep for 30 minutes before event");
+    if (minutesUntilEvent > MAX_TIME_MINUTES) {
+      Serial.println("Going to deep sleep for " + String(MAX_TIME_MINUTES) + " minutes before event");
       http.end();
       WiFi.disconnect();
       
-      uint64_t sleepTime = (minutesUntilEvent - 30) * 60 * 1000000ULL;
+      uint64_t sleepTime = (minutesUntilEvent - MAX_TIME_MINUTES) * 60 * 1000000ULL;
       Serial.print("Sleep time in microseconds: ");
       Serial.println(sleepTime);
       
@@ -180,26 +180,32 @@ void checkForNextEvent() {
       Serial.println("Deep sleep enabled, going to sleep now...");
       esp_deep_sleep_start();
     } else {
+      // Calculate progress as a ratio of remaining time to max time (30 minutes)
+      float progress = (float)secondsUntilEvent / (float)MAX_TIME_SECONDS;
+      progress = (progress < 0.0) ? 0.0 : ((progress > 1.0) ? 1.0 : progress);
+      
+      Serial.print("Initial progress: ");
+      Serial.println(progress);
+      
+      // Calculate colors based on progress
+      uint8_t base_r, base_g, base_b;
+      getColorForProgress(progress, base_r, base_g, base_b);
+      
+      // Scale colors by MAX_BRIGHTNESS
+      float brightnessScale = (float)MAX_BRIGHTNESS / 255.0;
+      uint8_t max_r = (uint8_t)(base_r * brightnessScale);
+      uint8_t max_g = (uint8_t)(base_g * brightnessScale);
+      uint8_t max_b = (uint8_t)(max_b * brightnessScale);
+      
+      // Perform startup animation
+      animateStartup(progress, max_r, max_g, max_b);
+      
       // Start countdown
       startTimeMillis = millis();
       endTimeMillis = startTimeMillis + secondsUntilEvent * 1000UL;
       Serial.print("Starting countdown for ");
       Serial.print(secondsUntilEvent);
       Serial.println(" seconds");
-      
-      // Calculate initial progress and colors for startup animation
-      float initialProgress = 1.0 - ((float)0 / (float)(secondsUntilEvent * 1000));
-      uint8_t base_r, base_g, base_b;
-      getColorForProgress(initialProgress, base_r, base_g, base_b);
-      
-      // Scale colors by MAX_BRIGHTNESS
-      float brightnessScale = (float)MAX_BRIGHTNESS / 255.0;
-      uint8_t max_r = (uint8_t)(base_r * brightnessScale);
-      uint8_t max_g = (uint8_t)(base_g * brightnessScale);
-      uint8_t max_b = (uint8_t)(base_b * brightnessScale);
-      
-      // Perform startup animation
-      animateStartup(initialProgress, max_r, max_g, max_b);
     }
   } else {
     Serial.print("HTTP request failed, error: ");
@@ -252,7 +258,11 @@ void loop() {
   // --- Calculate Progress ---
   unsigned long elapsedMillis = currentTimeMillis - startTimeMillis;
   unsigned long totalDurationMillis = endTimeMillis - startTimeMillis;
-  float progress = 1.0 - ((float)elapsedMillis / (float)totalDurationMillis);
+  float progress = (float)elapsedMillis / (float)totalDurationMillis;
+  // Convert to remaining time ratio
+  progress = 1.0 - progress;
+  // Scale to max time
+  progress = progress * ((float)(endTimeMillis - startTimeMillis) / (MAX_TIME_SECONDS * 1000.0));
   // Clamp progress just in case of floating point inaccuracies
   progress = (progress < 0.0) ? 0.0 : ((progress > 1.0) ? 1.0 : progress);
 
@@ -264,7 +274,7 @@ void loop() {
   float brightnessScale = (float)MAX_BRIGHTNESS / 255.0;
   uint8_t max_r = (uint8_t)(base_r * brightnessScale);
   uint8_t max_g = (uint8_t)(base_g * brightnessScale);
-  uint8_t max_b = (uint8_t)(base_b * brightnessScale);
+  uint8_t max_b = (uint8_t)(max_b * brightnessScale);
 
   // --- Update LEDs ---
   float threshold = progress * NUMPIXELS; // The point separating on/off pixels
